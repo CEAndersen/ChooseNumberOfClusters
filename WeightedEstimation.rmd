@@ -1,0 +1,66 @@
+---
+title: "WeightK"
+output: html_document
+---
+libraries (Remember to instal all the packages)
+```{r eval=FALSE}
+library(MixSim) #To create the cluster data
+library(NbClust) #30 stopping rules 
+library(plyr) #For data editing
+library(tidyr) #For data editing
+
+```
+
+
+```{r}
+#Set WD to data here 
+setwd("C:/Users/Camil/Desktop/Internship/Code/Data")
+
+#Save data as variable d. For NbClust each dimension has a column 
+d <- read.csv("ResultSimK.csv") 
+
+#Load weights
+weight <- read.csv("Weights.csv") #Data from 1000 simulations of clusters, where NbClust has calculated K from 30 stopping rules
+```
+Run NbClust on the data:
+Depending on how big the data is, this make take a long time (maybe hours). If you don't have time for that, change index from alllong to all and delete GAP, Gamma, Gplus and Tau from the weihts dataset. 
+```{r}
+NbEstimations <-NbClust(d, distance = "euclidean", min.nc = 2, max.nc = 10, method = "ward.D", index = "alllong") 
+
+Estomations=NbEstimations$Best.nc[1,]
+```
+
+Here I create a loop which will subset the estimations into groups based on the estimation. So all stopping rules that estimated 3 cluseters in one subset and all stopping rules that guseed for 4 clustsers in a different subset. For each subset I sum the weights assigned to each stopping rule. The number of clusters with the highest number is the final estimation for the amount of clusters in the dataset. The numbers are abitrary. 
+```{r}
+SummedGuesses = data.frame(0) #An empty dataframe to be filled in the loop
+CurrentGuess = data.frame(0) #An empty dataframe to be filled in the loop
+Score = data.frame(0) #An empty dataframe to be filled in the loop
+
+
+
+data = data.frame(Guess=cbind("Estimations" = Estomations, "weight"=weight$weight.score.100)) #Estimations from nbclust and weights in the same dataframe. 
+
+Guesses = data[,1] %>% #Find all unique guesses 
+  unique() %>%
+  na.omit() %>% # Remove NAs 
+  data.frame() #Make into dataframe
+
+#Sum all the weights for each unique guess 
+for (i in 1:nrow(Guesses)){
+  
+  CurrentGuess <- data.frame(subset(data, data$Guess.Estimations == Guesses[i,])) #Subset into rules that guessed the same number
+  Score <- sum(as.numeric(CurrentGuess[,2])) # sum the weights in the subset 
+  SummedGuesses <- cbind(SummedGuesses, Score)  #Make a dataframe that collects all the summed results 
+  
+  
+}
+
+SummedGuesses = t(SummedGuesses) #I transpose the data
+
+Guess = data.frame(cbind(Guess=Guesses, Score=SummedGuesses[-1,])) #Dataframe with the unique guesses and the summed results. The higest is the suggested number of clusters. 
+
+
+plot(Guess) #Very simple plot to show the results. 
+  
+```
+
