@@ -1,0 +1,299 @@
+---
+title: "Cluster investigation"
+output:
+html_document:
+keep_md: yes
+
+
+---
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+rgl::setupKnitr()
+```
+
+**Packages**
+```{r, message=FALSE, warning=FALSE}
+library(MixSim) #Simulate cluster data 
+library(tibble)
+library(scatterplot3d) #For plotting clusters 
+library(car) #For plotting clusters 
+library(rgl) #For plotting interactive
+library(factoextra) #Plotting 
+library(NbClust) #For determining K 
+library(tidyr) #Data.frame changes
+library(dplyr) #Pipes
+library(scales) #For rescaling
+
+set.seed(1995) #We need the same results everytime we run it
+```
+
+
+
+**Creating some cluster data: **  
+
+p = number of dimensions  
+Number 3 = the number of clusters  
+n = number of datapoints  
+MaxOmea = maximum amount of overlap of the clusters 
+BarOmega = avg amount over overlap of the clusters
+```{r, warning=FALSE}
+Sim.Settings <- MixSim(MaxOmega = 0.00, BarOmega = 0.00, 3, p=3, int = c(0.2, 1))
+Sim.Data <- simdataset(500, Pi = Sim.Settings$Pi, Mu = Sim.Settings$Mu, S = Sim.Settings$S, lambda=c(0.1, 10,10))
+Sim.Data <- data.frame(as_tibble(Sim.Data$X)) #Converting dataset into a tibble 
+```
+  
+    
+    
+**Visualizing the dataset**
+
+Stadic 3d plot 
+```{r}
+scatterplot3d(Sim.Data,
+              main="Simulated Clusters", # Title
+              pch = 16, #Point type
+              color="steelblue", #Colour 
+              box=F) # Remove the box lines in front of plot 
+
+```
+
+Interactive RGL plot  
+*Opens in a seperate RGL device window
+```{r rgl=TRUE, dev='png', message=FALSE}
+plot=scatter3d(x = Sim.Data$V1, y = Sim.Data$V2, z = Sim.Data$V3,
+          surface=F, grid = F, ellipsoid = F, point.col = "steelblue")
+```
+
+**Most common method: Elbow **  
+Here the Elbow Method estimates the number of cluseters in the simulated dataset to be 2. 
+```{r}
+fviz_nbclust(Sim.Data, kmeans, method = "wss") +
+  geom_vline(xintercept = 2, linetype = 2) + # XIntercept should be = to bend in lineplot
+  labs(subtitle = "The Elbow method") # add subtitle
+```
+
+The plot from the elbow method is not always clear. Somtimes the elbow in the plot is not so easy to determine.Somethimes there is more than one elbow. What is happening here, at 4 clusters?. That means the number of clusters becomes an evaluation via a plot, instead of a calculation. Therefore, this is not the optimal way to determine K. 
+
+
+**NbClust: 30 different stopping rules for determining the number of clusters in a dataset**  
+Two of the stopping rules are visual like the elbow method. Setting index = alllong would include all 30. But it is very slow. 
+```{r, message=FALSE, warning=FALSE, fig.show='hide', results='hide'}
+Cluts <-NbClust(Sim.Data, distance = "euclidean", min.nc = 2, max.nc = 10, method = "complete", index = "all") # Run NbClust
+```
+
+Plot of estimations 
+```{r, message=FALSE, warning=FALSE, results='hide'}
+fviz_nbclust(Cluts) # Plot result
+```
+
+NbClust suggests choosing K by the mojority rule. It seems strange, that all these stopping rules shuold have the same weight when deciding the amount of clusters there are in a given dataset. Here 15 stopping rules estimate the correct amount: 3. However, 5 stopping rules estimate that there are 6 clusters. In this case, where the clusters don't overlap at all, the correct amount should be somewhat clear. 
+
+
+  
+  
+### Test which stopping rules are best 
+
+
+**Creating a function, which will use MixSim to simulate data based on input of number of clusters **
+```{r, results = FALSE}
+
+SimulateClusters <- function(K){
+  
+  coordinates <- MixSim(MaxOmega = 0.00, BarOmega = 0.00, K, p =2, int = c(0.2, 1))
+  coordinates <- simdataset(n = 500, Pi = coordinates$Pi, Mu = coordinates$Mu, S = coordinates$S, lambda = c(0.1, 10))
+  coordinates <- data.frame(as_tibble(coordinates$X))
+  
+  return(coordinates=coordinates)
+ 
+}
+```
+
+**Create a loop, which will simulate the cluster coordinates with the function above, and pass it to NbClust**  
+If index=alllong, this takes a long time, if all, we get fewer stoppingrules, but the function works faster.    
+This could take a while...  
+```{r, echo=FALSE, fig.show='hide', results='hide'}
+
+K = round(runif(500, min = 2, max = 10),digits = 0) #Create n random digits between 2 and 10 - This should really be at least 1000 
+label=data.frame(0) #An empty dataframe for K to be stored in, in every iteration of the loop
+d = data.frame(0)
+result = data.frame(0)
+
+
+for (i in 1:length(K)){
+  
+  d <- SimulateClusters(K[i]) #Use the function SimulateClusters to simulate clusters based on a random K
+  label[i] <- data.frame(K[i]) #Save K for each iteration
+  d <-NbClust(d, distance = "euclidean", min.nc = 2, max.nc = 10, method = "complete", index = "alllong") #Run NbClust
+  print(i)
+  result <- data.frame(result, d$Best.nc[-2,])
+}
+
+```
+
+**Calculation of how well the stopping rules did: **  
+
+Create a loop, which will calculate the score for each stopping rule 
+```{r warning=FALSE}
+score = data.frame(0)
+dist.score = data.frame(0)
+result.new=data.frame(result[,-1], score, dist.score)
+result.new=rename(result.new, c("score"="X0", "dist.score"="X0.1"))
+
+
+for (i in 1:nrow(result.new)){
+  for (t in 1:length(label)){
+    
+    result.new$score[i] <- ifelse(result.new[i,t] == label[t], result.new$score[i] +1, result.new$score[i] +0)
+    result.new$dist.score[i] <- as.numeric(result.new$dist.score[i]) + abs(label[t] - result.new[i,t])
+  }
+}
+```
+
+
+**Plot the results **
+```{r}
+
+results = rownames_to_column(result, var = "rowname") #Get rownames as a column 
+
+  
+Scores = data.frame("rowname" = results$rowname, "score" = result.new$score, "dist.score" = as.numeric(result.new$dist.score))
+Scores %>%
+  mutate(dist.score = max(na.omit(Scores$dist.score)) - Scores$dist.score) %>%#Reversoe distance score, so high is best, low is bad
+  mutate(dist.score = rescale(dist.score)) %>%#rescale between 0 and 1 
+  mutate(score = rescale(score)) %>%
+  gather(score, dist.score, -rowname)%>% #Melt to long format 
+  na.omit() %>% # Remove NAs 
+  ggplot(., (aes(rowname, dist.score))) + # Make a plot to show results 
+  geom_bar(stat= "identity", aes(fill=score), position = "dodge")+
+  xlab("Stopping Rule") + ylab("Score") + ggtitle("Stopping Rule Performance on simulated data") +
+  theme_bw() + scale_fill_manual(values=c('steelblue1','steelblue3')) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  labs(fill = "Score Type") + 
+  theme(legend.position="bottom", legend.box = "horizontal")
+  
+  
+```
+
+### Assigning a weight to each stopping rule and testing  
+
+**Calculate weight**
+```{r}
+weight <- data.frame("rowname" = results$rowname, "Weight" = result.new$score/100)
+```
+
+Make the weighted guess into a function 
+```{r}
+WeightedGuessF <- function(d){
+  
+SummedGuesses = data.frame(0) #An empty dataframe to be filled in the loop
+CurrentGuess = data.frame(0) #An empty dataframe to be filled in the loop
+Score = data.frame(0) #An empty dataframe to be filled in the loop
+Guesses = data.frame(0)
+
+Guesses = d[,3] %>% #Find all unique guesses 
+  unique() %>%
+  na.omit() %>% # Remove NAs 
+  data.frame() #Make into dataframe
+
+#Sum all the weights for each unique guess 
+  for (i in 1:nrow(Guesses)){
+    
+    CurrentGuess <- data.frame(subset(d, d[,3] == Guesses[i,])) #Subset into rules that guessed the same number
+    Score <- sum(as.numeric(CurrentGuess[,2])) # sum the weights in the subset 
+    SummedGuesses <- cbind(SummedGuesses, Score)  #Make a dataframe that collects all the summed results 
+    
+    
+  }
+
+SummedGuesses = t(SummedGuesses) #I transpose the data
+Guess = data.frame(cbind(Guess=Guesses, Score=SummedGuesses[-1,]))#Dataframe with the unique guesses and the summed results. The higest is the suggested number of clusters.
+
+BestGuess = Guess[which.max(Guess$Score),]
+
+BestGuess = BestGuess[,1]
+
+return(BestGuess = BestGuess)
+  
+}
+```
+
+
+
+
+Simulate data and run NbClust and weighted rule on it 
+```{r}
+K <- round(runif(20, min = 2, max = 10),digits = 0) #Create n random digits between 2 and 10 - This should really be at least 1000 
+label <- data.frame(0) #An empty dataframe for K to be stored in, in every iteration of the loop
+d <- data.frame(0)
+result <- data.frame(0)
+WeightedGuess <- data.frame(0)
+Summedscore <- data.frame(0)
+
+
+for (i in 1:length(K)){
+  
+  d <- SimulateClusters(K[i]) #Use the function SimulateClusters to simulate clusters based on a random K
+  label[i] <- data.frame(K[i]) #Save K for each iteration
+  d <-NbClust(d, distance = "euclidean", min.nc = 2, max.nc = 10, method = "complete", index = "alllong") #Run NbClust
+  result <- data.frame(result, d$Best.nc[-2,]) #Save result of NbClust
+  WeightedGuess <- data.frame("weight" = weight, "estimations" = d$Best.nc[1,]) #Create dataframe to pass to weigh function
+  Summedscore[i] <- WeightedGuessF(WeightedGuess) #Estimate Weigted estimation with function and save results in dataframe 
+  print(i)
+}
+
+```
+
+Which rules were best 
+```{r warning=FALSE}
+
+#Add weigth to the results dataframe (They have different col names, which is a bit annoying)
+Summedscore1 = Summedscore %>%
+  t()
+  
+
+result.new <- result[,-1] %>%
+  t() %>%
+  cbind(., Summedscore1) %>%
+  data.frame() %>%
+  rename(., "WeightedGuess" = "V31")%>%
+  t() %>%
+  data.frame() 
+  
+
+score = data.frame(0)
+dist.score = data.frame(0)
+result.new=data.frame(result.new,score, dist.score)
+result.new=rename(result.new, c("score"="X0", "dist.score"="X0.1"))
+
+
+for (i in 1:nrow(result.new)){
+  for (t in 1:length(label)){
+    
+    result.new$score[i] <- ifelse(result.new[i,t] == label[t], result.new$score[i] +1, result.new$score[i] +0)
+    result.new$dist.score[i] <- as.numeric(result.new$dist.score[i]) + abs(label[t] - result.new[i,t])
+  }
+}
+```
+
+**Plot the results **
+```{r}
+
+results = rownames_to_column(result.new, var = "rowname") #Get rownames as a column 
+
+  
+Scores = data.frame("rowname" = results$rowname, "score" = result.new$score, "dist.score" = as.numeric(result.new$dist.score))
+Scores %>%
+  mutate(dist.score = max(na.omit(Scores$dist.score)) - Scores$dist.score) %>%#Reversoe distance score, so high is best, low is bad
+  mutate(dist.score = rescale(dist.score)) %>%#rescale between 0 and 1 
+  mutate(score = rescale(score)) %>%
+  gather(score, dist.score, -rowname)%>% #Melt to long format 
+  na.omit() %>% # Remove NAs 
+  ggplot(., (aes(rowname, dist.score))) + # Make a plot to show results 
+  geom_bar(stat= "identity", aes(fill=score), position = "dodge")+
+  xlab("Stopping Rule") + ylab("Score") + ggtitle("Stopping Rule Performance on simulated data") +
+  theme_bw() + scale_fill_manual(values=c('steelblue1','steelblue3')) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  labs(fill = "Score Type") + 
+  theme(legend.position="bottom", legend.box = "horizontal")
+  
+  
+```
